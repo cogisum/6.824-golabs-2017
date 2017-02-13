@@ -68,8 +68,8 @@ func doMap(
 	// invoke user map function
 	kvs := mapF(inFile, contents)
 	// create nReduce files
-	files := [nReduce]*io.File
-	encs := [nReduce]*json.Encoder
+	files := make([]*os.File, nReduce)
+	encs := make([]*json.Encoder, nReduce)
 	for r := 0; r < nReduce; r++ {
 		fn := reduceName(jobName, mapTaskNumber, r)
 		file, err := os.Create(fn)

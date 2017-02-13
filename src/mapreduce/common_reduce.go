@@ -83,7 +83,7 @@ func doReduce(
 		return
 	}
 	enc := json.NewEncoder(ofile)
-	for _, key := keys {
+	for _, key := range keys {
 		enc.Encode(KeyValue{key, reduceF(key, kvs[key])})
 	}
 	ofile.Close()
