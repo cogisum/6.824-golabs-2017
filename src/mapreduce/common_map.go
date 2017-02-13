@@ -2,7 +2,7 @@ package mapreduce
 
 import (
 	"hash/fnv"
-	"ioutil"
+	"io/ioutil"
 	"os"
 	"encoding/json"
 )

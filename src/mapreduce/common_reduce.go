@@ -1,7 +1,7 @@
 package mapreduce
 
 import (
-	"ioutil"
+	"io/ioutil"
 	"os"
 	"encoding/json"
 	"sort"
