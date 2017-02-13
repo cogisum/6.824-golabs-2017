@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"os"
 	"encoding/json"
+	"log"
 )
 
 // doMap manages one map task: it reads one of the input files
@@ -57,15 +58,15 @@ func doMap(
 	// Remember to close the file after you have written all the values!
 	//
 	// read file
-	raw_bytes, err = ioutil.ReadFile(inFile)
+	raw_bytes, err := ioutil.ReadFile(inFile)
 	if err != nil {
 		log.Fatal(err)
 		return
 	}
 	// convert []byte to string
-	contents = string(raw_bytes)
+	contents := string(raw_bytes)
 	// invoke user map function
-	kvs = mapF(inFile, contents)
+	kvs := mapF(inFile, contents)
 	inFile.Close()
 	// create nReduce files
 	files := [nReduce]*File

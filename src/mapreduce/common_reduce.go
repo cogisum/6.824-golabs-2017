@@ -1,10 +1,10 @@
 package mapreduce
 
 import (
-	"io/ioutil"
 	"os"
 	"encoding/json"
 	"sort"
+	"log"
 )
 
 // doReduce manages one reduce task: it reads the intermediate
