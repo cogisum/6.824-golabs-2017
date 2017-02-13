@@ -65,14 +65,14 @@ func doMap(
 	// convert []byte to string
 	contents = string(raw_bytes)
 	// invoke user map function
-	pairs = mapF(inFile, contents)
+	kvs = mapF(inFile, contents)
 	inFile.Close()
 	// create nReduce files
 	files := [nReduce]*File
 	encs := [nReduce]*Encoder
 	for r := 0; r < nReduce; r++ {
 		fn := reduceName(jobName, mapTaskNumber, r)
-		file, err := Create(fn)
+		file, err := os.Create(fn)
 		if err != nil {
 			log.Fatal(err)
 			return
@@ -80,11 +80,9 @@ func doMap(
 		files[r] = file
 		encs[r] = json.NewEncoder(file)
 	}
-	for _, pair := range pairs {
-		key := pair.Key
-		value := pair.Value
-		hash = ihash(key)
-		err := encs[hash].Encode(&value)
+	for _, kv := range kvs {
+		hash = ihash(kvs.Key)
+		err := encs[hash].Encode(kv)
 		if err != nil {
 			log.Fatal(err)
 		}
