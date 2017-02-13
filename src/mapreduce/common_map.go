@@ -67,10 +67,9 @@ func doMap(
 	contents := string(raw_bytes)
 	// invoke user map function
 	kvs := mapF(inFile, contents)
-	inFile.Close()
 	// create nReduce files
-	files := [nReduce]*File
-	encs := [nReduce]*Encoder
+	files := [nReduce]*io.File
+	encs := [nReduce]*json.Encoder
 	for r := 0; r < nReduce; r++ {
 		fn := reduceName(jobName, mapTaskNumber, r)
 		file, err := os.Create(fn)
@@ -82,7 +81,7 @@ func doMap(
 		encs[r] = json.NewEncoder(file)
 	}
 	for _, kv := range kvs {
-		hash = ihash(kvs.Key)
+		hash := ihash(kv.Key)
 		err := encs[hash].Encode(kv)
 		if err != nil {
 			log.Fatal(err)

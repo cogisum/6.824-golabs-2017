@@ -54,7 +54,7 @@ func doReduce(
 
 	kvs := make(map[string][]string)
 	for m := 0; m < nMap; m++ {
-		fn := reduceTaskNumber(jobName, m, reduceTaskNumber)
+		fn := reduceName(jobName, m, reduceTaskNumber)
 		ifile, err := os.Open(fn)
 		if err != nil {
 			log.Fatal(err)
@@ -72,10 +72,10 @@ func doReduce(
 		ifile.Close()
 	}
 	keys := []string{}
-	for key := kvs {
+	for key := range kvs {
 		keys = append(keys, key)
 	}
-	sort.Sort(keys)
+	sort.Strings(keys)
 
 	ofile, err := os.Create(outFile)
 	if err != nil {
