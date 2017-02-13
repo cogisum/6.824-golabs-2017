@@ -4,6 +4,7 @@ import (
 	"hash/fnv"
 	"ioutil"
 	"os"
+	"encoding/json"
 )
 
 // doMap manages one map task: it reads one of the input files
@@ -68,6 +69,7 @@ func doMap(
 	inFile.Close()
 	// create nReduce files
 	files := [nReduce]*File
+	encs := [nReduce]*Encoder
 	for r := 0; r < nReduce; r++ {
 		fn := reduceName(jobName, mapTaskNumber, r)
 		file, err := Create(fn)
@@ -76,12 +78,13 @@ func doMap(
 			return
 		}
 		files[r] = file
+		encs[r] = json.NewEncoder(file)
 	}
 	for _, pair := range pairs {
 		key := pair.Key
 		value := pair.Value
 		hash = ihash(key)
-		n, err := files[hash].WriteString(value)
+		err := encs[hash].Encode(&value)
 		if err != nil {
 			log.Fatal(err)
 		}
