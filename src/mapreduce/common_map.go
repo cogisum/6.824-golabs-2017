@@ -81,7 +81,7 @@ func doMap(
 		encs[r] = json.NewEncoder(file)
 	}
 	for _, kv := range kvs {
-		hash := ihash(kv.Key)
+		hash := ihash(kv.Key) % nReduce
 		err := encs[hash].Encode(kv)
 		if err != nil {
 			log.Fatal(err)
