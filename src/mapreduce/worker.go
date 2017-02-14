@@ -11,7 +11,6 @@ import (
 	"net/rpc"
 	"os"
 	"sync"
-    "strconv"
 )
 
 // Worker holds the state for a server waiting for DoTask or Shutdown RPCs
@@ -45,14 +44,12 @@ func (wk *Worker) DoTask(arg *DoTaskArgs, _ *struct{}) error {
 		log.Fatal("Worker.DoTask: more than one DoTask sent concurrently to a single worker\n")
 	}
 
-    debug("start do task " + strconv.Itoa(nTasks))
 	switch arg.Phase {
 	case mapPhase:
 		doMap(arg.JobName, arg.TaskNumber, arg.File, arg.NumOtherPhase, wk.Map)
 	case reducePhase:
 		doReduce(arg.JobName, arg.TaskNumber, mergeName(arg.JobName, arg.TaskNumber), arg.NumOtherPhase, wk.Reduce)
 	}
-    debug("end do task " + strconv.Itoa(nTasks))
 
 	wk.Lock()
 	wk.concurrent -= 1
