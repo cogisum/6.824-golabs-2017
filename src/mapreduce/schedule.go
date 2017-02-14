@@ -50,8 +50,10 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 		go func() {
 			defer wg.Done()
 			call(worker, "Worker.DoTask", args, new(struct{}))
+            registerChan <- worker
 		}()
 	}
+    fmt.Println("wait wg decrement to 0")
 	wg.Wait()
 	fmt.Printf("Schedule: %v phase done\n", phase)
 }
