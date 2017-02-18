@@ -21,7 +21,8 @@ import "sync"
 import "labrpc"
 import "time"
 import "math/rand"
-import "fmt"
+// import "fmt"
+import "log"
 
 // import "bytes"
 // import "encoding/gob"
@@ -129,6 +130,8 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+    DPrintf("peer %v(%v) receive heartbeat from %v(%v)\n",
+        rf.me, rf.currentTerm, args.LeaderId, args.Term)
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.Success = false
@@ -187,12 +190,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
         rf.timer = time.AfterFunc(time.Millisecond * time.Duration(rf.r.Intn(TIMEOUT_H - TIMEOUT_L) + TIMEOUT_L), rf.startElection)
 		reply.Accept = true
 		reply.Term = args.Term
-        fmt.Printf("peer %v(%v) vote candidate %v(%v)\n", rf.me,
+        DPrintf("peer %v(%v) vote candidate %v(%v)\n", rf.me,
             rf.currentTerm, args.CandidateId, args.Term)
     } else {
 		reply.Accept = false
 		reply.Term = rf.currentTerm
-        fmt.Printf("peer %v(%v) vote candidate %v(%v) voted for %v\n", rf.me,
+        DPrintf("peer %v(%v) deny candidate %v(%v) voted for %v\n", rf.me,
             rf.currentTerm, args.CandidateId, args.Term, rf.votedFor)
 	}
     rf.mu.Unlock()
@@ -294,6 +297,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+    log.SetFlags(log.Ltime | log.Lmicroseconds)
+
 	rf.mu.Lock()
 	rf.timer = time.AfterFunc(time.Millisecond * time.Duration(rf.r.Intn(TIMEOUT_H - TIMEOUT_L) + TIMEOUT_L), rf.startElection)
 	rf.mu.Unlock()
@@ -308,14 +313,16 @@ func (rf *Raft) startElection() {
 	rf.timer.Stop()
 	rf.timer = time.AfterFunc(time.Millisecond * time.Duration(rf.r.Intn(TIMEOUT_H - TIMEOUT_L) + TIMEOUT_L), rf.startElection)
 	rf.mu.Unlock()
+    DPrintf("in term %v peer %v start election\n", rf.currentTerm, rf.me)
 	args:= RequestVoteArgs{}
 	args.Term = rf.currentTerm
 	args.CandidateId = rf.me
 	votes := 1
 	wg := sync.WaitGroup{}
-	wg.Add(len(rf.peers))
-    // fmt.Printf("in term %v before raft %v requestvote\n", rf.currentTerm, rf.me)
+	wg.Add(len(rf.peers) - 1)
+    // DPrintf("in term %v before raft %v requestvote\n", rf.currentTerm, rf.me)
 	for i := range rf.peers {
+        if i == rf.me { continue }
 		reply := RequestVoteReply{}
 		go func(server int) {
 			if rf.sendRequestVote(server, &args, &reply) && reply.Accept {
@@ -335,7 +342,7 @@ func (rf *Raft) startElection() {
 		}(i)
 	}
 	wg.Wait()
-    fmt.Printf("* in term %v raft %v got %v votes\n", rf.currentTerm, rf.me, votes)
+    DPrintf("* in term %v raft %v got %v votes\n", rf.currentTerm, rf.me, votes)
 	if votes > len(rf.peers) / 2 {
 		rf.mu.Lock()
 		rf.timer.Stop()
@@ -346,17 +353,18 @@ func (rf *Raft) startElection() {
 }
 
 func (rf *Raft) startHeartBeat() {
-    fmt.Printf("in term %v raft %v start to send heartbeat\n", rf.currentTerm,
+    DPrintf("in term %v raft %v start to send heartbeat\n", rf.currentTerm,
         rf.me)
 	rf.mu.Lock()
 	rf.timer.Stop()
-	rf.timer = time.AfterFunc(time.Millisecond * time.Duration(HEARTBEAT), rf.startElection)
+	rf.timer = time.AfterFunc(time.Millisecond * time.Duration(HEARTBEAT), rf.startHeartBeat)
 	rf.mu.Unlock()
 	hb := AppendEntriesArgs{}
 	hb.Term = rf.currentTerm
 	hb.LeaderId = rf.me
 	hb.Entries = nil
     for i := range rf.peers {
+        if i == rf.me { continue }
 		go func(server int) {
 			reply := AppendEntriesReply{}
 			if rf.sendAppendEntries(server, &hb, &reply) &&
@@ -370,7 +378,7 @@ func (rf *Raft) startHeartBeat() {
 			}
 		}(i)
 	}
-    fmt.Printf("in term %v raft %v finished sending heartbeat\n", rf.currentTerm,
+    DPrintf("in term %v raft %v finished sending heartbeat\n", rf.currentTerm,
         rf.me)
 }
 
