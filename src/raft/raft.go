@@ -66,6 +66,7 @@ type Raft struct {
 	matchIndex []int // for each server, idnex of highest log entry known to be replicated on server
 	timer *time.Timer // timer used to do timeout
 	r *rand.Rand // rand
+    tc string // just for debug
 }
 
 // return currentTerm and whether this server
@@ -122,6 +123,7 @@ type AppendEntriesArgs struct {
 	Prevlogterm int // term of prevLogIndex entry
 	Entries []LogEntry // log entries to store
 	Leadercommit int // leader's commitIndex
+    Tc string
 }
 
 type AppendEntriesReply struct {
@@ -130,8 +132,8 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-    DPrintf("peer %v(%v) receive heartbeat from %v(%v)\n",
-        rf.me, rf.currentTerm, args.LeaderId, args.Term)
+    DPrintf("peer %v%v(%v) receive heartbeat from %v%v(%v)\n",
+        rf.tc, rf.me, rf.currentTerm, args.Tc, args.LeaderId, args.Term)
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.Success = false
@@ -165,6 +167,7 @@ type RequestVoteArgs struct {
 	CandidateId int // candidate id
 	LastLogIndex int // index of candidate's last log entry
 	LastLogTerm int // term of candidate's last log entry
+    Tc string
 }
 
 //
@@ -190,13 +193,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
         rf.timer = time.AfterFunc(time.Millisecond * time.Duration(rf.r.Intn(TIMEOUT_H - TIMEOUT_L) + TIMEOUT_L), rf.startElection)
 		reply.Accept = true
 		reply.Term = args.Term
-        DPrintf("peer %v(%v) vote candidate %v(%v)\n", rf.me,
-            rf.currentTerm, args.CandidateId, args.Term)
+        DPrintf("peer %v%v(%v) vote candidate %v%v(%v)\n", rf.tc, rf.me,
+            rf.currentTerm, args.Tc, args.CandidateId, args.Term)
     } else {
 		reply.Accept = false
 		reply.Term = rf.currentTerm
-        DPrintf("peer %v(%v) deny candidate %v(%v) voted for %v\n", rf.me,
-            rf.currentTerm, args.CandidateId, args.Term, rf.votedFor)
+        DPrintf("peer %v%v(%v) deny candidate %v%v(%v) voted for %v\n",
+            rf.tc, rf.me, rf.currentTerm, args.Tc, args.CandidateId, args.Term, rf.votedFor)
 	}
     rf.mu.Unlock()
 }
@@ -270,6 +273,8 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 }
 
+var counter int = 0
+
 //
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
@@ -293,6 +298,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.leaderId = -1
 	rf.r = rand.New(rand.NewSource(time.Now().UnixNano()))
 	rf.currentTerm = 0
+    rf.tc = string('A' + counter)
+    if me + 1 == len(peers) {
+        counter++
+    }
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -312,11 +321,12 @@ func (rf *Raft) startElection() {
     rf.votedFor = rf.me
 	rf.timer.Stop()
 	rf.timer = time.AfterFunc(time.Millisecond * time.Duration(rf.r.Intn(TIMEOUT_H - TIMEOUT_L) + TIMEOUT_L), rf.startElection)
-	rf.mu.Unlock()
-    DPrintf("in term %v peer %v start election\n", rf.currentTerm, rf.me)
+    rf.mu.Unlock()
+    DPrintf("in term %v peer %v%v start election\n", rf.currentTerm, rf.tc, rf.me)
 	args:= RequestVoteArgs{}
 	args.Term = rf.currentTerm
 	args.CandidateId = rf.me
+    args.Tc = rf.tc
 	votes := 1
 	wg := sync.WaitGroup{}
 	wg.Add(len(rf.peers) - 1)
@@ -326,6 +336,7 @@ func (rf *Raft) startElection() {
 		reply := RequestVoteReply{}
 		go func(server int) {
 			if rf.sendRequestVote(server, &args, &reply) && reply.Accept {
+                DPrintf("%v%v got a vote from %v", rf.tc, rf.currentTerm, server)
 				rf.mu.Lock()
 				votes++
 				rf.mu.Unlock()
@@ -342,10 +353,9 @@ func (rf *Raft) startElection() {
 		}(i)
 	}
 	wg.Wait()
-    DPrintf("* in term %v raft %v got %v votes\n", rf.currentTerm, rf.me, votes)
+    DPrintf("* in term %v raft %v%v got %v votes\n", rf.currentTerm, rf.tc, rf.me, votes)
 	if votes > len(rf.peers) / 2 {
 		rf.mu.Lock()
-		rf.timer.Stop()
         rf.leaderId = rf.me
 		rf.mu.Unlock()
 		go rf.startHeartBeat()
@@ -353,8 +363,8 @@ func (rf *Raft) startElection() {
 }
 
 func (rf *Raft) startHeartBeat() {
-    DPrintf("in term %v raft %v start to send heartbeat\n", rf.currentTerm,
-        rf.me)
+    DPrintf("in term %v raft %v%v start to send heartbeat\n", rf.currentTerm,
+        rf.tc, rf.me)
 	rf.mu.Lock()
 	rf.timer.Stop()
 	rf.timer = time.AfterFunc(time.Millisecond * time.Duration(HEARTBEAT), rf.startHeartBeat)
@@ -363,6 +373,7 @@ func (rf *Raft) startHeartBeat() {
 	hb.Term = rf.currentTerm
 	hb.LeaderId = rf.me
 	hb.Entries = nil
+    hb.Tc = rf.tc
     for i := range rf.peers {
         if i == rf.me { continue }
 		go func(server int) {
@@ -372,13 +383,14 @@ func (rf *Raft) startHeartBeat() {
 				rf.mu.Lock()
 				rf.currentTerm = reply.Term
                 rf.votedFor = -1
+                rf.leaderId = -1
 				rf.timer.Stop()
 				rf.timer = time.AfterFunc(time.Millisecond * time.Duration(rf.r.Intn(TIMEOUT_H - TIMEOUT_L) + TIMEOUT_L), rf.startElection)
 				rf.mu.Unlock()
 			}
 		}(i)
 	}
-    DPrintf("in term %v raft %v finished sending heartbeat\n", rf.currentTerm,
-        rf.me)
+    DPrintf("in term %v raft %v%v finished sending heartbeat\n", rf.currentTerm,
+        rf.tc, rf.me)
 }
 

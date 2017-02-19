@@ -50,19 +50,19 @@ func TestReElection2A(t *testing.T) {
 	leader1 := cfg.checkOneLeader()
 
 	// if the leader disconnects, a new one should be elected.
-    fmt.Printf("========= check disconnect leader %v\n", leader1)
+    DPrintf("========= check disconnect leader %v\n", leader1)
 	cfg.disconnect(leader1)
 	cfg.checkOneLeader()
 
 	// if the old leader rejoins, that shouldn't
 	// disturb the old leader.
-    fmt.Printf("========= check rejoin leader %v\n", leader1)
+    DPrintf("========= check rejoin leader %v\n", leader1)
 	cfg.connect(leader1)
 	leader2 := cfg.checkOneLeader()
 
 	// if there's no quorum, no leader should
 	// be elected.
-    fmt.Printf("========= check disconnect leader %v and %v\n", leader2,
+    DPrintf("========= check disconnect leader %v and %v\n", leader2,
         (leader2 + 1) % servers)
 	cfg.disconnect(leader2)
 	cfg.disconnect((leader2 + 1) % servers)
@@ -70,7 +70,7 @@ func TestReElection2A(t *testing.T) {
 	cfg.checkNoLeader()
 
 	// if a quorum arises, it should elect a leader.
-    fmt.Printf("========= check quorum, % join\n", (leader2 + 1) % servers)
+    DPrintf("========= check quorum, % join\n", (leader2 + 1) % servers)
 	cfg.connect((leader2 + 1) % servers)
 	cfg.checkOneLeader()
 
