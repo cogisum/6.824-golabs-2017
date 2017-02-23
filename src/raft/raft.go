@@ -30,8 +30,8 @@ import "log"
 // timeout related constants
 const (
 	TIMEOUT_HB = 200 * time.Millisecond
-	TIMEOUT_LOW = 3 * HEARTBEAT
-	TIMEOUT_HIGH = TIMEOUT_L + HEARTBEAT
+	TIMEOUT_LOW = 3 * TIMEOUT_HB
+	TIMEOUT_HIGH = TIMEOUT_LOW + TIMEOUT_HB
 )
 
 // raft's state constants
@@ -42,8 +42,8 @@ const (
 )
 
 func getRandTimeout() time.Duration {
-	(rand.Intn(TIMEOUT_HIGH.Nanoseconds() - TIMEOUT_LOW.Nanoseconds()) +
-		TIMEOUT_LOW.Nanoseconds) * time.Nanoseconds
+	return time.Duration(rand.Int63n(TIMEOUT_HIGH.Nanoseconds() -
+        TIMEOUT_LOW.Nanoseconds()) + TIMEOUT_LOW.Nanoseconds())
 }
 
 //
@@ -132,17 +132,17 @@ func (rf *Raft) readPersist(data []byte) {
 }
 
 type LogEntry struct {
-	term int
-	cmd interface{}
+	Term int
+	Cmd interface{}
 }
 
 type AppendEntriesArgs struct {
 	Term int // leader's term
 	LeaderId int // so followers can redirect clients
-	Prevlogindex int // index of log entry immediately preceding new ones
-	Prevlogterm int // term of prevLogIndex entry
+	PrevLogIndex int // index of log entry immediately preceding new ones
+	PrevLogTerm int // term of prevLogIndex entry
 	Entries []LogEntry // log entries to store
-	Leadercommit int // leader's commitIndex
+	LeaderCommit int // leader's commitIndex
     Tc string
 }
 
@@ -151,7 +151,11 @@ type AppendEntriesReply struct {
 	Success bool // true if follower contained entry matching prevLogIndex and prevLogTerm
 }
 
+// NOTE: if you use AppendEntries(*AppendEntriesArgs, *AppendEntriesReply),
+// then the receiver AppendEntries will receive args *AppendEntriesArgs as nil
+// but I don't know why still
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+    DPrintf("in appendentries args is %v\n", args)
     DPrintf("peer %v%v(%v) receive heartbeat from %v%v(%v)\n",
         rf.tc, rf.me, rf.currentTerm, args.Tc, args.LeaderId, args.Term)
     rf.mu.Lock()
@@ -175,9 +179,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.heartBeatCh <- true
 }
 
-func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs,
+func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs,
         reply *AppendEntriesReply) bool {
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+    DPrintf("in sendappendentries args is %v\n", args)
+	ok := rf.peers[server].Call("Raft.AppendEntries", &args, reply)
 	return ok
 }
 
@@ -201,7 +206,7 @@ type RequestVoteArgs struct {
 type RequestVoteReply struct {
 	// Your data here (2A).
 	Term int // currentTerm, for candidate to update itself
-	Accept bool // accept a candidate as leader
+	VoteGranted bool // accept a candidate as leader
 }
 
 //
@@ -214,7 +219,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
     if args.Term < rf.currentTerm {
     	reply.Term = rf.currentTerm
-    	reply.Accept = false
+    	reply.VoteGranted = false
     	return
     }
     if args.Term > rf.currentTerm {
@@ -222,19 +227,19 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
     	rf.votedFor = -1
     	rf.state = FOLLOWER
     }
-    lastLogIndex = len(rf.log) - 1
-    lastLogTerm = rf.log[lastLogIndex].term
+    lastLogIndex := len(rf.log) - 1
+    lastLogTerm := rf.log[lastLogIndex].Term
     if rf.votedFor == -1 && (args.LastLogTerm > lastLogTerm || (args.LastLogTerm ==
-    		lastLogTerm && args.LastLogIndex > lastLogIndex)) {
+    		lastLogTerm && args.LastLogIndex >= lastLogIndex)) {
     	DPrintf("peer %v%v(%v) vote candidate %v%v(%v)\n", rf.tc, rf.me,
             rf.currentTerm, args.Tc, args.CandidateId, args.Term)
     	rf.votedFor = args.CandidateId
-    	reply.Accept = true
-    	voteGrantCh <- true
+    	reply.VoteGranted = true
+    	rf.voteGrantCh <- true
     } else {
     	DPrintf("peer %v%v(%v) deny candidate %v%v(%v) voted for %v\n",
             rf.tc, rf.me, rf.currentTerm, args.Tc, args.CandidateId, args.Term, rf.votedFor)
-    	reply.Accept = false
+    	reply.VoteGranted = false
     }
 }
 
@@ -329,10 +334,18 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here (2A, 2B, 2C).
 	rf.votedFor = -1
+    rf.currentTerm = 0
     rf.tc = string('A' + counter)
     if me + 1 == len(peers) {
         counter++
     }
+    // dummy
+    rf.log = append(rf.log, LogEntry{})
+    // if you don't make channel manually, then it will stuck
+    // is it necessary to use buffered channel?
+    rf.heartBeatCh = make(chan bool)
+    rf.voteGrantCh = make(chan bool)
+    rf.inauguralCh = make(chan bool)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -341,12 +354,24 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
     go func() {
     	for {
+            var state string;
+            switch rf.state {
+            case FOLLOWER:
+                state = "follower"
+            case CANDIDATE:
+                state = "candidate"
+            case LEADER:
+                state = "LEADER"
+            }
+            DPrintf("%v%v(%v) in %v state\n", rf.tc, rf.me, rf.currentTerm, state)
     		switch rf.state {
     		case FOLLOWER:
     			select {
     			case <-rf.heartBeatCh:
     			case <-rf.voteGrantCh:
-    			case <-time.After(getRandTimeout):
+                    DPrintf("after %v%v(%v) vote", rf.tc, rf.me,
+                        rf.currentTerm)
+    			case <-time.After(getRandTimeout()):
     				rf.state = CANDIDATE // need protection?
     			}
     		case CANDIDATE:
@@ -355,23 +380,23 @@ func Make(peers []*labrpc.ClientEnd, me int,
     			rf.votedFor = rf.me
     			rf.voteCount = 1
     			rf.mu.Unlock()
-    			go startElection()
+    			go rf.startElection()
     			select {
-    			case rf.heartBeatCh:
-    			case rf.voteGrantCh:
-    			case rf.inauguralCh:
-    			case <-time.After(getRandTimeout):
+    			case <-rf.heartBeatCh:
+    			case <-rf.voteGrantCh:
+    			case <-rf.inauguralCh:
+    			case <-time.After(getRandTimeout()):
     			}
     		case LEADER:
-    			go startHeartBeat()
+    			go rf.startHeartBeat()
     			select {
-    			case rf.heartBeatCh:
-    			case rf.voteGrantCh:
-    			case <-time.After(getRandTimeout):
+    			case <-rf.heartBeatCh:
+    			case <-rf.voteGrantCh:
+    			case <-time.After(TIMEOUT_HB):
     			}
     		}
     	}
-    }
+    }()
 	
 	return rf
 }
@@ -379,21 +404,27 @@ func Make(peers []*labrpc.ClientEnd, me int,
 // startElection and startHeartBeat are mutual exclusive
 func (rf *Raft) startElection() {
 	term := rf.currentTerm
-    DPrintf("in term %v peer %v%v start election\n", rf.term, rf.tc, rf.me)
+    DPrintf("in term %v peer %v%v start election\n", term, rf.tc, rf.me)
 	args:= RequestVoteArgs{}
-	args.Term = rf.term
+	args.Term = rf.currentTerm
 	args.CandidateId = rf.me
     args.Tc = rf.tc
-    // DPrintf("in term %v before raft %v requestvote\n", rf.currentTerm, rf.me)
 	for i := 0; i < len(rf.peers) && rf.state == CANDIDATE; i++ {
         if i == rf.me { continue }
-		reply := RequestVoteReply{}
 		go func(server int) {
-			if rf.sendRequestVote(server, &args, &reply) && reply.Accept {
-                DPrintf("%v%v got a vote from %v", rf.tc, rf.term, server)
+            reply := RequestVoteReply{}
+            ok := rf.sendRequestVote(server, &args, &reply)
+            DPrintf("%v%v(%v) requestvote result from %v is %v", rf.tc,
+                rf.me, term, server, ok)
+			if ok && reply.VoteGranted {
+                DPrintf("%v%v(%v) got a vote from %v", rf.tc, rf.me, term, server)
 				rf.mu.Lock()
 				rf.voteCount++
-				if rf.voteCount > len(rf.peers) / 2 {
+                // use ==, otherwise this may trigger multiple times
+				if rf.voteCount == len(rf.peers) / 2 + 1{
+                    DPrintf("%v%v(%v) becomes leader\n", rf.tc, rf.me, term)
+                    rf.state = LEADER
+                    rf.votedFor = -1
 					rf.inauguralCh <- true
 				}
 				rf.mu.Unlock()
@@ -402,6 +433,7 @@ func (rf *Raft) startElection() {
 				// trun to follower state
 				rf.mu.Lock()
 				rf.currentTerm = reply.Term
+                rf.votedFor = -1
 				rf.state = FOLLOWER
 				rf.mu.Unlock()
 			}
@@ -413,10 +445,6 @@ func (rf *Raft) startElection() {
 func (rf *Raft) startHeartBeat() {
     DPrintf("in term %v raft %v%v start to send heartbeat\n", rf.currentTerm,
         rf.tc, rf.me)
-	rf.mu.Lock()
-	rf.timer.Stop()
-	rf.timer = time.AfterFunc(time.Millisecond * time.Duration(HEARTBEAT), rf.startHeartBeat)
-	rf.mu.Unlock()
 	hb := AppendEntriesArgs{}
 	hb.Term = rf.currentTerm
 	hb.LeaderId = rf.me
@@ -424,21 +452,30 @@ func (rf *Raft) startHeartBeat() {
     hb.Tc = rf.tc
     for i := range rf.peers {
         if i == rf.me { continue }
-		go func(server int) {
+        // if don't invoke this function with the heartbeat as argument,
+        // as go func(int), then you may get unexpected value when reference
+        // hb in the new thread after this thread exit.
+		go func(server int, args2 AppendEntriesArgs) {
+            var args AppendEntriesArgs
+            args.Term = rf.currentTerm
+            args.LeaderId = rf.me
+            args.PrevLogIndex = 0
+            args.PrevLogTerm = 0
+            // args.Entries = make([]LogEntry, 0)
+            // args.Entries = nil
 			reply := AppendEntriesReply{}
-			if rf.sendAppendEntries(server, &hb, &reply) &&
+			if rf.sendAppendEntries(server, args, &reply) &&
                     reply.Term > rf.currentTerm {
 				rf.mu.Lock()
 				rf.currentTerm = reply.Term
                 rf.votedFor = -1
-                rf.leaderId = -1
-				rf.timer.Stop()
-				rf.timer = time.AfterFunc(time.Millisecond * time.Duration(rf.r.Intn(TIMEOUT_H - TIMEOUT_L) + TIMEOUT_L), rf.startElection)
 				rf.mu.Unlock()
 			}
-		}(i)
+		}(i, hb)
 	}
+    time.Sleep(1 * time.Second)
     DPrintf("in term %v raft %v%v finished sending heartbeat\n", rf.currentTerm,
         rf.tc, rf.me)
+
 }
 
