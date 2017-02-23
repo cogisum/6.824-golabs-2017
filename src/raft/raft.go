@@ -155,9 +155,6 @@ type AppendEntriesReply struct {
 // then the receiver AppendEntries will receive args *AppendEntriesArgs as nil
 // but I don't know why still
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-    DPrintf("in appendentries args is %v\n", args)
-    DPrintf("peer %v%v(%v) receive heartbeat from %v%v(%v)\n",
-        rf.tc, rf.me, rf.currentTerm, args.Tc, args.LeaderId, args.Term)
     rf.mu.Lock()
     defer rf.mu.Unlock()
 
@@ -181,7 +178,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs,
         reply *AppendEntriesReply) bool {
-    DPrintf("in sendappendentries args is %v\n", args)
 	ok := rf.peers[server].Call("Raft.AppendEntries", &args, reply)
 	return ok
 }
@@ -229,16 +225,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
     }
     lastLogIndex := len(rf.log) - 1
     lastLogTerm := rf.log[lastLogIndex].Term
-    if rf.votedFor == -1 && (args.LastLogTerm > lastLogTerm || (args.LastLogTerm ==
-    		lastLogTerm && args.LastLogIndex >= lastLogIndex)) {
-    	DPrintf("peer %v%v(%v) vote candidate %v%v(%v)\n", rf.tc, rf.me,
-            rf.currentTerm, args.Tc, args.CandidateId, args.Term)
+    if rf.votedFor == -1 && (args.LastLogTerm > lastLogTerm ||
+            (args.LastLogTerm == lastLogTerm &&
+            args.LastLogIndex >= lastLogIndex)) {
     	rf.votedFor = args.CandidateId
     	reply.VoteGranted = true
     	rf.voteGrantCh <- true
     } else {
-    	DPrintf("peer %v%v(%v) deny candidate %v%v(%v) voted for %v\n",
-            rf.tc, rf.me, rf.currentTerm, args.Tc, args.CandidateId, args.Term, rf.votedFor)
     	reply.VoteGranted = false
     }
 }
@@ -354,23 +347,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
     go func() {
     	for {
-            var state string;
-            switch rf.state {
-            case FOLLOWER:
-                state = "follower"
-            case CANDIDATE:
-                state = "candidate"
-            case LEADER:
-                state = "LEADER"
-            }
-            DPrintf("%v%v(%v) in %v state\n", rf.tc, rf.me, rf.currentTerm, state)
     		switch rf.state {
     		case FOLLOWER:
     			select {
     			case <-rf.heartBeatCh:
     			case <-rf.voteGrantCh:
-                    DPrintf("after %v%v(%v) vote", rf.tc, rf.me,
-                        rf.currentTerm)
     			case <-time.After(getRandTimeout()):
     				rf.state = CANDIDATE // need protection?
     			}
@@ -403,8 +384,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 // startElection and startHeartBeat are mutual exclusive
 func (rf *Raft) startElection() {
-	term := rf.currentTerm
-    DPrintf("in term %v peer %v%v start election\n", term, rf.tc, rf.me)
 	args:= RequestVoteArgs{}
 	args.Term = rf.currentTerm
 	args.CandidateId = rf.me
@@ -414,15 +393,11 @@ func (rf *Raft) startElection() {
 		go func(server int) {
             reply := RequestVoteReply{}
             ok := rf.sendRequestVote(server, &args, &reply)
-            DPrintf("%v%v(%v) requestvote result from %v is %v", rf.tc,
-                rf.me, term, server, ok)
 			if ok && reply.VoteGranted {
-                DPrintf("%v%v(%v) got a vote from %v", rf.tc, rf.me, term, server)
 				rf.mu.Lock()
 				rf.voteCount++
                 // use ==, otherwise this may trigger multiple times
 				if rf.voteCount == len(rf.peers) / 2 + 1{
-                    DPrintf("%v%v(%v) becomes leader\n", rf.tc, rf.me, term)
                     rf.state = LEADER
                     rf.votedFor = -1
 					rf.inauguralCh <- true
@@ -443,8 +418,6 @@ func (rf *Raft) startElection() {
 
 // heart beat message with log entries carried.
 func (rf *Raft) startHeartBeat() {
-    DPrintf("in term %v raft %v%v start to send heartbeat\n", rf.currentTerm,
-        rf.tc, rf.me)
 	hb := AppendEntriesArgs{}
 	hb.Term = rf.currentTerm
 	hb.LeaderId = rf.me
@@ -474,8 +447,6 @@ func (rf *Raft) startHeartBeat() {
 		}(i, hb)
 	}
     time.Sleep(1 * time.Second)
-    DPrintf("in term %v raft %v%v finished sending heartbeat\n", rf.currentTerm,
-        rf.tc, rf.me)
 
 }
 
