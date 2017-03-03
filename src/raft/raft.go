@@ -163,11 +163,22 @@ type AppendEntriesReply struct {
 
 // NOTE: if you use AppendEntries(*AppendEntriesArgs, *AppendEntriesReply),
 // then the receiver AppendEntries will receive args *AppendEntriesArgs as nil
-// but I don't know why still
+// but I still don't know why
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+    lastLogIndex, lastLogTerm := rf.getLastLogInfo()
+    DPrintf("[[[[ %v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v)\n",
+        rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
+        args.PrevLogTerm, lastLogIndex, lastLogTerm)
+
     rf.mu.Lock()
     defer rf.mu.Unlock()
 
+    DPrintf("]]]] %v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v)\n" + 
+        "the received one is %v\nand its current log is %v\n",
+        rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
+        args.PrevLogTerm, lastLogIndex, lastLogTerm, args.Entries, rf.log)
+
+	reply.Term = args.Term
 
     // - delayed packet from last leader
     // - stale leader 
@@ -177,12 +188,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	reply.Term = args.Term
-    lastLogIndex, lastLogTerm := rf.getLastLogInfo()
-    DPrintf("%v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v)\n" + 
-        "the received one is %v\nand its current log is %v\n",
-        rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
-        args.PrevLogTerm, lastLogIndex, lastLogTerm, args.Entries, rf.log)
     if args.PrevLogIndex > lastLogIndex {
         reply.Success = false
     } else if args.PrevLogTerm != rf.log[args.PrevLogIndex].Term {
@@ -206,7 +211,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	rf.currentTerm = args.Term
 	rf.state = FOLLOWER
-	rf.votedFor = -1
+	rf.votedFor = args.LeaderId
 	rf.heartBeatCh <- true
 }
 
@@ -261,11 +266,14 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+    DPrintf("<<<< %v(%v) receive requestvote from %v(%v)\n",
+        rf.me, rf.currentTerm, args.CandidateId, args.Term)
     rf.mu.Lock()  
   	defer rf.mu.Unlock()
+    DPrintf(">>>> %v(%v) receive requestvote from %v(%v)\n",
+        rf.me, rf.currentTerm, args.CandidateId, args.Term)
 
     term := rf.currentTerm
-
     if args.Term < rf.currentTerm {
     	reply.Term = rf.currentTerm
     	reply.VoteGranted = false
@@ -284,6 +292,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
             args.LastLogIndex >= lastLogIndex)) {
     	rf.votedFor = args.CandidateId
     	reply.VoteGranted = true
+        DPrintf("%v(%v) receive requestvote from %v(%v) and chan<-\n",
+            rf.me, term, args.CandidateId, args.Term)
     	rf.voteGrantCh <- true
         DPrintf("%v(%v) receive requestvote from %v(%v) and vote for it\n",
             rf.me, term, args.CandidateId, args.Term)
@@ -292,6 +302,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
         DPrintf("%v(%v) receive requestvote from %v(%v) and deny it\n",
             rf.me, term, args.CandidateId, args.Term)
     }
+    DPrintf("==== %v(%v) receive requestvote from %v(%v)\n",
+        rf.me, rf.currentTerm, args.CandidateId, args.Term)
 }
 
 //
@@ -415,6 +427,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
     // state transition
     go func() {
     	for {
+            var state string;
+            if rf.state == LEADER {
+                state = "LEADER"
+            } else if rf.state == FOLLOWER {
+                state = "FOLLOWER"
+            } else {
+                state = "CANDIDATE"
+            }
+            DPrintf("%v(%V) in %v\n", rf.me, rf.currentTerm, state)
     		switch rf.state {
     		case FOLLOWER:
     			select {
@@ -441,6 +462,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
                         rf.nextIndex[i] = lastLogIndex + 1
                         rf.matchIndex[i] = 0
                     }
+                    rf.state = LEADER
                     DPrintf("%v(%v) became leader\n", rf.me,
                         rf.currentTerm)
     			case <-time.After(getRandTimeout()):
@@ -497,8 +519,6 @@ func (rf *Raft) startElection() {
 				rf.voteCount++
                 // use ==, otherwise this may trigger multiple times
 				if rf.voteCount == len(rf.peers) / 2 + 1{
-                    rf.state = LEADER
-                    rf.votedFor = -1
 					rf.inauguralCh <- true
 				}
 				rf.mu.Unlock()
@@ -520,7 +540,11 @@ func (rf *Raft) startHeartBeat() {
     DPrintf("%v(%v) start a heartbeat\n", rf.me, rf.currentTerm)
     // trick, how to know a log entry committed? count how many servers the log
     // was replicated on
-    for i := len(rf.log) - 1; i > rf.commitIndex; i-- {
+    // only log entries from the leader's current term are committed by
+    // counting replicas
+    rf.mu.Lock()
+    for i := len(rf.log) - 1; i > rf.commitIndex &&
+            rf.log[i].Term == rf.currentTerm; i-- {
         count := 0
         for _, replicated := range rf.matchIndex {
             if replicated >= i {
@@ -533,6 +557,8 @@ func (rf *Raft) startHeartBeat() {
             break
         }
     }
+    rf.mu.Unlock()
+
     DPrintf("%v(%v) nextIndex %v, matchIndex %v\n", rf.me, rf.currentTerm,
         rf.nextIndex, rf.matchIndex)
     DPrintf("%v(%v) log in leader %v(%v) is %v\n", rf.me, rf.currentTerm,
@@ -550,11 +576,11 @@ func (rf *Raft) startHeartBeat() {
             args.LeaderId = rf.me
             args.LeaderCommit = rf.commitIndex
             args.PrevLogIndex = rf.nextIndex[server] - 1
+            DPrintf("%v(%v) to %v: %v/%v+%v\n", rf.me, term,
+                server, args.PrevLogIndex, rf.nextIndex[server],
+                len(rf.log) - rf.nextIndex[server])
             args.PrevLogTerm = rf.log[args.PrevLogIndex].Term
             args.Entries = make([]LogEntry, len(rf.log) - rf.nextIndex[server])
-            DPrintf("%v(%v) to %v: %v+%v\n", rf.me, term,
-                server, rf.nextIndex[server],
-                len(rf.log) - rf.nextIndex[server])
             copy(args.Entries, rf.log[rf.nextIndex[server]:])
 			reply := AppendEntriesReply{}
 			if rf.sendAppendEntries(server, args, &reply) {
@@ -580,3 +606,27 @@ func (rf *Raft) startHeartBeat() {
 
 }
 
+
+/*
+Make中state CANDIDATE时加锁/接收chan与requestvote和appendentries加锁/发送chan死锁示例：
+
+case 1
+以requestvote为例，（appendentries同）
+1. 收到requestvote中term为+1，然后voteGrantCh<-
+2. 收到requestvote中term为+2，然后voteGrantCh<-
+...直到把voteGrantCh的buffer用完，（虽然在buffer很大时不太可能出现这种情况）
+再次收到requestvote，然后timeout，切换到candidate状态，由于requestvote中申请的锁
+还没有释放，所以candidate等待获取锁，接下来会再次收到requestvote或appendentries，
+同样地会在申请锁时阻塞。
+
+case 2
+server in Make case state == CANDIDATE
+spot 1. AppendEntries
+收到appendentries，得到锁，heartBeatCh<-，由于对heartBeatCh的接收要在spot 2中更新完rf.currentTerm后才会执行，所以现在阻塞，并且不会返回给leader，所以leader会将nextIndex后退，虽然这个server已经成功收到并且可能已经apply了。同事在appendentries中，虽然已经将server的state改为follower，但是由于spot2一直阻塞，所以并没有机会重新进入for以应用follower状态。
+spot 2. State Loop
+申请锁以更新rf.currentTerm和rf.votedFor，阻塞
+
+solution：
+1. case CANDIDATE后要加锁的部分在一个goroutine中进行，保证安全，然而线程的创建/回收开销较大
+2. 另voteGrantCh和heartBeatCh的缓冲区较大，比如100，这样虽然不能保证安全（如case 1缓冲区被消耗完），但是出现死锁的概率应该极小。
+ */
