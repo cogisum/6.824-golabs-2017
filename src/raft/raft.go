@@ -414,7 +414,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
     rf.log = []LogEntry{ LogEntry{ 0, "Genesis" } }
     // if you don't make channel manually, then it will stuck
     // is it necessary to use buffered channel?
-    rf.heartBeatCh = make(chan bool)
+    rf.heartBeatCh = make(chan bool, 10)
     rf.voteGrantCh = make(chan bool)
     rf.inauguralCh = make(chan bool)
     rf.commitCh = make(chan bool)
@@ -445,11 +445,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
     				rf.state = CANDIDATE // need protection?
     			}
     		case CANDIDATE:
-    			rf.mu.Lock()
-    			rf.currentTerm++
-    			rf.votedFor = rf.me
-    			rf.voteCount = 1
-    			rf.mu.Unlock()
     			go rf.startElection()
     			select {
     			case <-rf.heartBeatCh:
@@ -504,6 +499,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 // startElection and startHeartBeat are mutual exclusive
 func (rf *Raft) startElection() {
+    rf.mu.Lock()
+    rf.currentTerm++
+    rf.votedFor = rf.me
+    rf.voteCount = 1
+    rf.mu.Unlock()
     DPrintf("%v(%v) start a election\n", rf.me, rf.currentTerm)
 	args:= RequestVoteArgs{}
 	args.Term = rf.currentTerm
@@ -626,7 +626,10 @@ spot 1. AppendEntries
 spot 2. State Loop
 申请锁以更新rf.currentTerm和rf.votedFor，阻塞
 
+case 3
+同样地inauguralCh与lock也能造成死锁。
+
 solution：
-1. case CANDIDATE后要加锁的部分在一个goroutine中进行，保证安全，然而线程的创建/回收开销较大
+1. case CANDIDATE后要加锁的部分在一个goroutine中进行，保证安全，然而线程的创建/回收开销较大（补充，将其放到startElection中）
 2. 另voteGrantCh和heartBeatCh的缓冲区较大，比如100，这样虽然不能保证安全（如case 1缓冲区被消耗完），但是出现死锁的概率应该极小。
  */
