@@ -631,5 +631,5 @@ case 3
 
 solution：
 1. case CANDIDATE后要加锁的部分在一个goroutine中进行，保证安全，然而线程的创建/回收开销较大（补充，将其放到startElection中）
-2. 另voteGrantCh和heartBeatCh的缓冲区较大，比如100，这样虽然不能保证安全（如case 1缓冲区被消耗完），但是出现死锁的概率应该极小。
+2. 令voteGrantCh和heartBeatCh的缓冲区较大，比如100，这样虽然不能保证安全（如case 1缓冲区被消耗完），但是出现死锁的概率应该极小。
  */
