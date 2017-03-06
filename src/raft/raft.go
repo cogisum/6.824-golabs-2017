@@ -189,6 +189,16 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term int // currentTerm, for leader to update itself
 	Success bool // true if follower contained entry matching prevLogIndex and prevLogTerm
+    ConflictTerm int
+    FirstIndex  int
+}
+
+func (rf *Raft) getFirstIndexOfTerm(term int) int {
+    index := len(rf.log) - 1;
+    for index >= 0 && rf.log[index].Term >= term {
+        index--
+    }
+    return index + 1
 }
 
 // NOTE: if you use AppendEntries(*AppendEntriesArgs, *AppendEntriesReply),
@@ -196,9 +206,9 @@ type AppendEntriesReply struct {
 // but I still don't know why
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
     lastLogIndex, lastLogTerm := rf.getLastLogInfo()
-    DPrintf("%v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v)\n",
-        rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
-        args.PrevLogTerm, lastLogIndex, lastLogTerm)
+    // DPrintf("%v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v)\n",
+    //     rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
+    //     args.PrevLogTerm, lastLogIndex, lastLogTerm)
 
     // DPrintf("[[[[ %v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v)\n",
     //     rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
@@ -207,12 +217,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
     rf.mu.Lock()
     defer rf.mu.Unlock()
 
-    // DPrintf("]]]] %v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v)\n" + 
-    //     "the received one is %v\nand its current log is %v\n",
-    //     rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
-    //     args.PrevLogTerm, lastLogIndex, lastLogTerm, args.Entries, rf.log)
-
     lastLogIndex, lastLogTerm = rf.getLastLogInfo()
+
 
 	reply.Term = args.Term
 
@@ -230,16 +236,30 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.currentTerm = args.Term
     if args.PrevLogIndex > lastLogIndex {
         reply.Success = false
+        reply.ConflictTerm = lastLogTerm
+        reply.FirstIndex = rf.getFirstIndexOfTerm(lastLogTerm)
+        DPrintf("%v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v) R\n" + 
+            "the received one is %v\nand its current log is %v\n",
+            rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
+            args.PrevLogTerm, lastLogIndex, lastLogTerm, args.Entries, rf.log)
     } else if args.PrevLogTerm != rf.log[args.PrevLogIndex].Term {
-        rf.truncateLog(args.PrevLogIndex)
         reply.Success = false
+        reply.ConflictTerm = rf.log[args.PrevLogIndex].Term
+        reply.FirstIndex = rf.getFirstIndexOfTerm(reply.ConflictTerm)
+        DPrintf("%v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v) R\n" + 
+            "the received one is %v\nand its current log is %v\n",
+            rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
+            args.PrevLogTerm, lastLogIndex, lastLogTerm, args.Entries, rf.log)
+        rf.truncateLog(args.PrevLogIndex)
     } else {
-        if args.PrevLogIndex < lastLogIndex {
-            rf.truncateLog(args.PrevLogIndex + 1)
-        }
-        rf.log = append(rf.log, args.Entries...)
+        DPrintf("%v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v) Y\n" + 
+            "the received one is %v\nand its current log is %v\n",
+            rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
+            args.PrevLogTerm, lastLogIndex, lastLogTerm, args.Entries, rf.log)
+        rf.log = append(rf.log[:args.PrevLogIndex+1], args.Entries...)
         rf.persist()
         reply.Success = true
+        DPrintf("%v(%v) succ %v->%v\n", rf.me, rf.currentTerm, args.PrevLogIndex + 1, len(rf.log))
         if args.LeaderCommit > rf.commitIndex {
             if args.LeaderCommit < len(rf.log) {
                 rf.commitIndex = args.LeaderCommit
@@ -406,6 +426,8 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Your code here (2B).
+    rf.mu.Lock()
+    defer rf.mu.Unlock()
     var index int
     term, isLeader := rf.GetState()
     if isLeader {
@@ -413,11 +435,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
         // what if this leader fail?
         DPrintf("%v(%v) receive command %v\n", rf.me, rf.currentTerm,
             command)
-        rf.mu.Lock()
         index = len(rf.log)
         rf.log = append(rf.log, LogEntry{ term, command })
         rf.persist()
-        rf.mu.Unlock()
     }
 
 	return index, term, isLeader
@@ -488,7 +508,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
             } else {
                 state = "CANDIDATE"
             }
-            DPrintf("%v(%V) in %v\n", rf.me, rf.currentTerm, state)
+            DPrintf("%v(%V) in %v \n", rf.me, rf.currentTerm, state)
     		switch rf.state {
     		case FOLLOWER:
     			select {
@@ -571,13 +591,14 @@ func (rf *Raft) startElection() {
             rf.mu.Lock()
             defer rf.mu.Unlock()
 			if ok && reply.VoteGranted {
-				rf.voteCount++
-                // use ==, otherwise this may trigger multiple times
                 // discard if stale
-				if rf.voteCount == len(rf.peers) / 2 + 1 && 
-                        rf.currentTerm == args.Term {
-					rf.inauguralCh <- true
-				}
+                if rf.currentTerm == args.Term {
+                    rf.voteCount++
+                    // use ==, otherwise this may trigger multiple times
+                    if rf.voteCount == len(rf.peers) / 2 + 1 {
+                        rf.inauguralCh <- true
+                    }
+                }
 			}
 			if reply.Term > rf.currentTerm {
 				// trun to follower state
@@ -618,8 +639,8 @@ func (rf *Raft) startHeartBeat() {
         rf.nextIndex, rf.matchIndex)
     // DPrintf("%v(%v) log in leader %v(%v) is %v\n", rf.me, rf.currentTerm,
     //     rf.me, rf.currentTerm, rf.log)
-    DPrintf("%v(%v) log in leader %v(%v) len %v\n", rf.me, rf.currentTerm,
-        rf.me, rf.currentTerm, len(rf.log))
+    DPrintf("%v(%v) log in leader %v(%v) len %v log %v\n", rf.me,
+        rf.currentTerm, rf.me, rf.currentTerm, len(rf.log), rf.log)
     term := rf.currentTerm
 
     for i := 0; i < len(rf.peers) && rf.state == LEADER; i++ {
@@ -643,6 +664,8 @@ func (rf *Raft) startHeartBeat() {
 			if rf.sendAppendEntries(server, args, &reply) {
                 rf.mu.Lock()
                 defer rf.mu.Unlock()
+                DPrintf("%v(%v) to %v reply %v\n", rf.me, args.Term, server,
+                    reply)
                 if reply.Term > rf.currentTerm {
                     DPrintf("%v(%v) to %v stale leader\n", rf.me, args.Term,
                         server)
@@ -658,9 +681,15 @@ func (rf *Raft) startHeartBeat() {
                         args.Term, server, oldNextIndex, rf.nextIndex[server])
                 } else {
                     oldNextIndex := rf.nextIndex[server]
+                    firstIndex := rf.getFirstIndexOfTerm(reply.ConflictTerm)
+                    if firstIndex == len(rf.log) ||
+                            rf.log[firstIndex].Term == reply.ConflictTerm {
+                        rf.nextIndex[server] = firstIndex
+                    } else {
+                        rf.nextIndex[server] = reply.FirstIndex
+                    }
                     rf.nextIndex[server] = max(rf.matchIndex[server] + 1,
-                        min(rf.nextIndex[server],
-                        args.PrevLogIndex - STEPBACK + 1))
+                        rf.nextIndex[server])
                     DPrintf("%v(%v) to %v fail nextIndex %v->%v\n", rf.me,
                         args.Term, server, oldNextIndex, rf.nextIndex[server])
                 }
