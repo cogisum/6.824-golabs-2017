@@ -143,7 +143,6 @@ func (rf *Raft) persist() {
     e.Encode(rf.log)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
-    DPrintf("%v(%v)")
 }
 
 //
@@ -205,19 +204,10 @@ func (rf *Raft) getFirstIndexOfTerm(term int) int {
 // then the receiver AppendEntries will receive args *AppendEntriesArgs as nil
 // but I still don't know why
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-    lastLogIndex, lastLogTerm := rf.getLastLogInfo()
-    // DPrintf("%v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v)\n",
-    //     rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
-    //     args.PrevLogTerm, lastLogIndex, lastLogTerm)
-
-    // DPrintf("[[[[ %v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v)\n",
-    //     rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
-    //     args.PrevLogTerm, lastLogIndex, lastLogTerm)
-        
     rf.mu.Lock()
     defer rf.mu.Unlock()
 
-    lastLogIndex, lastLogTerm = rf.getLastLogInfo()
+    lastLogIndex, lastLogTerm := rf.getLastLogInfo()
 
 
 	reply.Term = args.Term
@@ -227,9 +217,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.Success = false
-    DPrintf("------ %v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v)\n",
-        rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
-        args.PrevLogTerm, lastLogIndex, lastLogTerm)
 		return
 	}
 
@@ -238,28 +225,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
         reply.Success = false
         reply.ConflictTerm = lastLogTerm
         reply.FirstIndex = rf.getFirstIndexOfTerm(lastLogTerm)
-        DPrintf("%v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v) R\n" + 
-            "the received one is %v\nand its current log is %v\n",
-            rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
-            args.PrevLogTerm, lastLogIndex, lastLogTerm, args.Entries, rf.log)
     } else if args.PrevLogTerm != rf.log[args.PrevLogIndex].Term {
         reply.Success = false
         reply.ConflictTerm = rf.log[args.PrevLogIndex].Term
         reply.FirstIndex = rf.getFirstIndexOfTerm(reply.ConflictTerm)
-        DPrintf("%v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v) R\n" + 
-            "the received one is %v\nand its current log is %v\n",
-            rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
-            args.PrevLogTerm, lastLogIndex, lastLogTerm, args.Entries, rf.log)
-        rf.truncateLog(args.PrevLogIndex)
     } else {
-        DPrintf("%v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v) Y\n" + 
-            "the received one is %v\nand its current log is %v\n",
-            rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
-            args.PrevLogTerm, lastLogIndex, lastLogTerm, args.Entries, rf.log)
         rf.log = append(rf.log[:args.PrevLogIndex+1], args.Entries...)
         rf.persist()
         reply.Success = true
-        DPrintf("%v(%v) succ %v->%v\n", rf.me, rf.currentTerm, args.PrevLogIndex + 1, len(rf.log))
         if args.LeaderCommit > rf.commitIndex {
             if args.LeaderCommit < len(rf.log) {
                 rf.commitIndex = args.LeaderCommit
@@ -272,9 +245,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.state = FOLLOWER
 	// rf.votedFor = args.LeaderId
 	rf.heartBeatCh <- true
-    DPrintf("------ %v(%v) receive appendentries from %v(%v) : %v(%v)-%v(%v)\n",
-        rf.me, rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
-        args.PrevLogTerm, lastLogIndex, lastLogTerm)
 }
 
 func (rf *Raft) getCommand() []interface{} {
@@ -286,16 +256,9 @@ func (rf *Raft) getCommand() []interface{} {
 }
 
 func (rf *Raft) truncateLog(to int) {
-    // bcommands := rf.getCommand()
-    oldlen := len(rf.log)
     if len(rf.log) >= to {
         rf.log = rf.log[:to]
     }
-    // acommands := rf.getCommand()
-    // DPrintf("%v(%v) before truncate from %v:\n%v\nand after%v\n",
-    //     rf.me, rf.currentTerm, to, bcommands, acommands)
-    DPrintf("%v(%v) before truncate [%v,%v)\n",
-        rf.me, rf.currentTerm, to, oldlen)
 }
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs,
@@ -331,21 +294,12 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-    // DPrintf("<<<< %v(%v) receive requestvote from %v(%v)\n",
-    //     rf.me, rf.currentTerm, args.CandidateId, args.Term)
-    DPrintf("%v(%v) receive requestvote from %v(%v)\n",
-        rf.me, rf.currentTerm, args.CandidateId, args.Term)
     rf.mu.Lock()  
   	defer rf.mu.Unlock()
-    DPrintf(">>>> %v(%v) receive requestvote from %v(%v)\n",
-        rf.me, rf.currentTerm, args.CandidateId, args.Term)
 
-    term := rf.currentTerm
     if args.Term < rf.currentTerm {
     	reply.Term = rf.currentTerm
     	reply.VoteGranted = false
-        DPrintf("%v(%v) receive requestvote from %v(%v) and deny it\n",
-            rf.me, term, args.CandidateId, args.Term)
     	return
     }
     if args.Term > rf.currentTerm {
@@ -360,20 +314,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
     	rf.votedFor = args.CandidateId
         rf.persist()
     	reply.VoteGranted = true
-        DPrintf("%v(%v) receive requestvote from %v(%v) and chan<-\n",
-            rf.me, term, args.CandidateId, args.Term)
     	rf.voteGrantCh <- true
-        DPrintf("%v(%v) receive requestvote from %v(%v) index(term) " + 
-            "%v(%v):%v(%v) and vote for it\n", rf.me, term, args.CandidateId,
-            args.Term, args.LastLogIndex, args.LastLogTerm, lastLogIndex,
-            lastLogTerm)
     } else {
     	reply.VoteGranted = false
-        DPrintf("%v(%v) receive requestvote from %v(%v) and deny it\n",
-            rf.me, term, args.CandidateId, args.Term)
     }
-    DPrintf("====== %v(%v) receive requestvote from %v(%v)\n",
-        rf.me, rf.currentTerm, args.CandidateId, args.Term)
 }
 
 //
@@ -433,8 +377,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
     if isLeader {
         // respond immediately without agreement from a majority?
         // what if this leader fail?
-        DPrintf("%v(%v) receive command %v\n", rf.me, rf.currentTerm,
-            command)
         index = len(rf.log)
         rf.log = append(rf.log, LogEntry{ term, command })
         rf.persist()
@@ -492,23 +434,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-    DPrintf("in Make %v(%v) votedFor %v log %v\n", rf.me, rf.currentTerm,
-        rf.votedFor, rf.log)
 
     log.SetFlags(log.Ltime | log.Lmicroseconds)
 
     // state transition
     go func() {
     	for {
-            var state string;
-            if rf.state == LEADER {
-                state = "LEADER"
-            } else if rf.state == FOLLOWER {
-                state = "FOLLOWER"
-            } else {
-                state = "CANDIDATE"
-            }
-            DPrintf("%v(%V) in %v \n", rf.me, rf.currentTerm, state)
     		switch rf.state {
     		case FOLLOWER:
     			select {
@@ -531,8 +462,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
                         rf.matchIndex[i] = 0
                     }
                     rf.state = LEADER
-                    DPrintf("%v(%v) became leader\n", rf.me,
-                        rf.currentTerm)
     			case <-time.After(getRandTimeout()):
     			}
     		case LEADER:
@@ -551,16 +480,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
         for {
             select {
             case <-rf.commitCh:
-                DPrintf("%v(%v) start to apply, %v-%v\n", rf.me,
-                    rf.currentTerm, rf.lastApplied + 1,
-                    rf.commitIndex)
                 for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
                     applyMsg := ApplyMsg{}
                     applyMsg.Index = i
                     applyMsg.Command = rf.log[i].Command
                     applyCh <- applyMsg
-                    DPrintf("%v(%v) message %v is %v\n", rf.me, rf.currentTerm,
-                        i, applyMsg)
                     rf.lastApplied++
                 }
             }
@@ -582,7 +506,6 @@ func (rf *Raft) startElection() {
 	args.CandidateId = rf.me
     args.LastLogIndex, args.LastLogTerm = rf.getLastLogInfo()
     rf.mu.Unlock()
-    DPrintf("%v(%v) start a election\n", rf.me, args.Term)
 	for i := 0; i < len(rf.peers) && rf.state == CANDIDATE; i++ {
         if i == rf.me { continue }
 		go func(server int) {
@@ -612,7 +535,6 @@ func (rf *Raft) startElection() {
 
 // heart beat message with log entries carried.
 func (rf *Raft) startHeartBeat() {
-    DPrintf("%v(%v) start a heartbeat\n", rf.me, rf.currentTerm)
     // trick, how to know a log entry committed? count how many servers the log
     // was replicated on
     // only log entries from the leader's current term are committed by
@@ -635,12 +557,6 @@ func (rf *Raft) startHeartBeat() {
         }
     }
 
-    DPrintf("%v(%v) nextIndex %v, matchIndex %v\n", rf.me, rf.currentTerm,
-        rf.nextIndex, rf.matchIndex)
-    // DPrintf("%v(%v) log in leader %v(%v) is %v\n", rf.me, rf.currentTerm,
-    //     rf.me, rf.currentTerm, rf.log)
-    DPrintf("%v(%v) log in leader %v(%v) len %v log %v\n", rf.me,
-        rf.currentTerm, rf.me, rf.currentTerm, len(rf.log), rf.log)
     term := rf.currentTerm
 
     for i := 0; i < len(rf.peers) && rf.state == LEADER; i++ {
@@ -653,9 +569,6 @@ func (rf *Raft) startHeartBeat() {
         args.LeaderId = rf.me
         args.LeaderCommit = rf.commitIndex
         args.PrevLogIndex = rf.nextIndex[i] - 1
-        DPrintf("%v(%v) to %v: %v/%v+%v %v]\n", rf.me, rf.currentTerm, i,
-            args.PrevLogIndex, rf.nextIndex[i], len(rf.log) - rf.nextIndex[i],
-            len(rf.log) - 1)
         args.PrevLogTerm = rf.log[args.PrevLogIndex].Term
         args.Entries = make([]LogEntry, len(rf.log) - rf.nextIndex[i])
         copy(args.Entries, rf.log[rf.nextIndex[i]:])
@@ -664,23 +577,15 @@ func (rf *Raft) startHeartBeat() {
 			if rf.sendAppendEntries(server, args, &reply) {
                 rf.mu.Lock()
                 defer rf.mu.Unlock()
-                DPrintf("%v(%v) to %v reply %v\n", rf.me, args.Term, server,
-                    reply)
                 if reply.Term > rf.currentTerm {
-                    DPrintf("%v(%v) to %v stale leader\n", rf.me, args.Term,
-                        server)
                     rf.currentTerm = reply.Term
                     rf.votedFor = -1
                     rf.state = FOLLOWER
                 } else if reply.Success {
-                    oldNextIndex := rf.nextIndex[server]
                     rf.nextIndex[server] = max(rf.nextIndex[server],
                         args.PrevLogIndex + len(args.Entries) + 1)
                     rf.matchIndex[server] = rf.nextIndex[server] - 1
-                    DPrintf("%v(%v) to %v succ nextIndex %v->%v\n", rf.me,
-                        args.Term, server, oldNextIndex, rf.nextIndex[server])
                 } else {
-                    oldNextIndex := rf.nextIndex[server]
                     firstIndex := rf.getFirstIndexOfTerm(reply.ConflictTerm)
                     if firstIndex == len(rf.log) ||
                             rf.log[firstIndex].Term == reply.ConflictTerm {
@@ -690,8 +595,6 @@ func (rf *Raft) startHeartBeat() {
                     }
                     rf.nextIndex[server] = max(rf.matchIndex[server] + 1,
                         rf.nextIndex[server])
-                    DPrintf("%v(%v) to %v fail nextIndex %v->%v\n", rf.me,
-                        args.Term, server, oldNextIndex, rf.nextIndex[server])
                 }
 			}
 		}(i)
@@ -726,3 +629,5 @@ solution：
 1. case CANDIDATE后要加锁的部分在一个goroutine中进行，保证安全，然而线程的创建/回收开销较大（补充，将其放到startElection中）
 2. 令voteGrantCh和heartBeatCh的缓冲区较大，比如100，这样虽然不能保证安全（如case 1缓冲区被消耗完），但是出现死锁的概率应该极小。
  */
+
+
