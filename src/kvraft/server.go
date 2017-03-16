@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-const Debug = 0
+const Debug = 2
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -22,6 +22,10 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+    OpName string
+    Key string
+    NewValue string
+    OldValue string
 }
 
 type RaftKV struct {
@@ -33,15 +37,74 @@ type RaftKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+    store map[string]string
+    wait bool
+    respCh chan raft.ApplyMsg
 }
 
 
+// the leader may be stale, don't consider it now
 func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+    DPrintf("kv %v receive Get %v\n", kv.me, args)
+    kv.mu.Lock()
+    defer kv.mu.Unlock()
+    cmd := Op{ OpName: "Get", Key: args.Key }
+    index, _, ok := kv.rf.Start(cmd)
+    if ok == false {
+        reply.WrongLeader = true
+        reply.Err = ErrWrongLeader
+        return
+    }
+    DPrintf("kv %v receive Get %v wait for message\n", kv.me, args)
+    kv.wait = true
+    msg := <-kv.respCh
+    DPrintf("kv %v receive Get %v obtain %v\n", kv.me, args, msg)
+    _, ok2 := kv.rf.GetState()
+    reply.WrongLeader = !ok2
+    if msg.Index != index {
+        reply.Err = ErrIndexNotMatch 
+    } else if msg.Command != cmd {
+        reply.Err = ErrCommandNotMatch
+    } else {
+        reply.Value = kv.store[args.Key]
+        reply.Err = OK
+    }
+    DPrintf("kv %v receive Get %v reply %v\n", kv.me, args, reply)
+    kv.wait = false
 }
 
 func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+    kv.mu.Lock()
+    defer kv.mu.Unlock()
+    oldValue := kv.store[args.Key]
+    // dummy, still has error
+    cmd := Op{ OpName: args.Op, Key: args.Key, NewValue: args.Value,
+        OldValue: oldValue }
+    index, _, ok := kv.rf.Start(cmd)
+    DPrintf("kv %v putappend %v index %v %v\n", kv.me, cmd, index, ok)
+    if ok == false {
+        reply.WrongLeader = true
+        reply.Err = ErrWrongLeader
+        return
+    }
+    DPrintf("kv %v putappend %v wait message\n", kv.me, cmd)
+    kv.wait = true
+    msg := <-kv.respCh
+    DPrintf("kv %v PutAppend %v got %v\n", kv.me, cmd, msg)
+    _, ok2 := kv.rf.GetState()
+    reply.WrongLeader = !ok2
+    if msg.Index != index {
+        reply.Err = ErrIndexNotMatch
+    } else if msg.Command != cmd {
+        reply.Err = ErrCommandNotMatch
+    } else {
+        reply.Err = OK
+    }
+    DPrintf("kv %v putappend %v index %v : %v %v err %v\n", kv.me, cmd,
+        index, msg.Index, msg.Command, reply.Err)
+    kv.wait = false
 }
 
 //
@@ -83,6 +146,30 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
+    kv.store = make(map[string]string)
+    kv.wait = false
+    kv.respCh = make(chan raft.ApplyMsg)
+
+    go func() {
+        for {
+            msg := <- kv.applyCh
+            DPrintf("kv %v apply msg %v\n", kv.me, msg)
+            op := msg.Command.(Op)
+            switch op.OpName {
+            case "Get":
+            case "Put":
+                kv.store[op.Key] = op.NewValue
+            case "Append":
+                concated := kv.store[op.Key] + op.NewValue
+                kv.store[op.Key] = concated
+            }
+            DPrintf("before kv %v wait is %v\n", kv.me, kv.wait)
+            if kv.wait {
+                kv.respCh <- msg
+            }
+            DPrintf("after kv %v wait is %v\n", kv.me, kv.wait)
+        }
+    }()
 
 	return kv
 }

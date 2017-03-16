@@ -50,26 +50,32 @@ func TestReElection2A(t *testing.T) {
 	leader1 := cfg.checkOneLeader()
 
 	// if the leader disconnects, a new one should be elected.
+    DPrintf("========= check disconnect leader %v\n", leader1)
 	cfg.disconnect(leader1)
 	cfg.checkOneLeader()
 
 	// if the old leader rejoins, that shouldn't
 	// disturb the old leader.
+    DPrintf("========= check rejoin leader %v\n", leader1)
 	cfg.connect(leader1)
 	leader2 := cfg.checkOneLeader()
 
 	// if there's no quorum, no leader should
 	// be elected.
+    DPrintf("========= check disconnect leader %v and %v\n", leader2,
+        (leader2 + 1) % servers)
 	cfg.disconnect(leader2)
 	cfg.disconnect((leader2 + 1) % servers)
 	time.Sleep(2 * RaftElectionTimeout)
 	cfg.checkNoLeader()
 
 	// if a quorum arises, it should elect a leader.
+    DPrintf("========= check quorum, % join\n", (leader2 + 1) % servers)
 	cfg.connect((leader2 + 1) % servers)
 	cfg.checkOneLeader()
 
 	// re-join of last node shouldn't prevent leader from existing.
+    fmt.Printf("checking %v rejoin\n", leader2)
 	cfg.connect(leader2)
 	cfg.checkOneLeader()
 
@@ -727,16 +733,16 @@ func TestFigure8Unreliable2C(t *testing.T) {
 
 	fmt.Printf("Test (2C): Figure 8 (unreliable) ...\n")
 
-	cfg.one(rand.Int()%10000, 1)
+	cfg.one(-1, 1)
 
 	nup := servers
-	for iters := 0; iters < 1000; iters++ {
-		if iters == 200 {
+	for iters := 0; iters < 10000; iters += 10 {
+		if iters == 2000 {
 			cfg.setlongreordering(true)
 		}
 		leader := -1
 		for i := 0; i < servers; i++ {
-			_, _, ok := cfg.rafts[i].Start(rand.Int() % 10000)
+			_, _, ok := cfg.rafts[i].Start(iters + i)
 			if ok && cfg.connected[i] {
 				leader = i
 			}
@@ -770,7 +776,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 		}
 	}
 
-	cfg.one(rand.Int()%10000, servers)
+	cfg.one(10000, servers)
 
 	fmt.Printf("  ... Passed\n")
 }

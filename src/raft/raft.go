@@ -204,8 +204,12 @@ func (rf *Raft) getFirstIndexOfTerm(term int) int {
 // then the receiver AppendEntries will receive args *AppendEntriesArgs as nil
 // but I still don't know why
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+    DPrintf("raft %v(%v) receive appendentries from %v\n", rf.me,
+        rf.currentTerm, args.LeaderId)
     rf.mu.Lock()
     defer rf.mu.Unlock()
+    defer DPrintf("raft %v(%v) receive appendentries from %v\n", rf.me,
+        rf.currentTerm, args.LeaderId)
 
     lastLogIndex, lastLogTerm := rf.getLastLogInfo()
 
@@ -239,12 +243,31 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
             } else {
                 rf.commitIndex = len(rf.log) - 1
             }
+            DPrintf("raft %v(%v) receive appendentries from %v before" +
+                " commit [%v, %v]\n", rf.me, rf.currentTerm, args.LeaderId,
+                rf.lastApplied + 1, rf.commitIndex)
             rf.commitCh <- true
+            DPrintf("raft %v(%v) receive appendentries from %v after" +
+                " commit [%v, %v]\n", rf.me, rf.currentTerm, args.LeaderId,
+                rf.lastApplied + 1, rf.commitIndex)
         }
     }
 	rf.state = FOLLOWER
 	// rf.votedFor = args.LeaderId
+    if reply.Success {
+        DPrintf("%v(%v) receive appendentries from %v and accept it: %v\n",
+            rf.me, rf.currentTerm, args.LeaderId, args.Entries)
+
+    } else {
+        DPrintf("%v(%v) receive appendentries from %v and deny it: %v\n",
+            rf.me, rf.currentTerm, args.LeaderId, args.Entries)
+
+    }
+    DPrintf("raft %v(%v) receive appendentries from %v before heartbeat\n", rf.me,
+        rf.currentTerm, args.LeaderId)
 	rf.heartBeatCh <- true
+    DPrintf("raft %v(%v) receive appendentries from %v after heartbeat\n", rf.me,
+        rf.currentTerm, args.LeaderId)
 }
 
 func (rf *Raft) getCommand() []interface{} {
@@ -294,8 +317,12 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+    DPrintf("raft %v(%v) receive requestvote from %v\n", rf.me, rf.currentTerm,
+        args.CandidateId)
     rf.mu.Lock()  
   	defer rf.mu.Unlock()
+    defer DPrintf("raft %v(%v) exit requestvote from %v\n", rf.me,
+        rf.currentTerm, args.CandidateId)
 
     if args.Term < rf.currentTerm {
     	reply.Term = rf.currentTerm
@@ -314,7 +341,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
     	rf.votedFor = args.CandidateId
         rf.persist()
     	reply.VoteGranted = true
+        DPrintf("raft %v(%v) receive requestvote from %v before vote\n",
+            rf.me, rf.currentTerm, args.CandidateId)
     	rf.voteGrantCh <- true
+        DPrintf("raft %v(%v) receive requestvote from %v after vote\n",
+            rf.me, rf.currentTerm, args.CandidateId)
     } else {
     	reply.VoteGranted = false
     }
@@ -372,6 +403,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Your code here (2B).
     rf.mu.Lock()
     defer rf.mu.Unlock()
+    DPrintf("raft %v(%v) receive command %v\n", rf.me, rf.currentTerm, command)
     var index int
     term, isLeader := rf.GetState()
     if isLeader {
@@ -462,6 +494,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
                         rf.matchIndex[i] = 0
                     }
                     rf.state = LEADER
+                    DPrintf("raft %v(%v) became leader\n", rf.me, rf.currentTerm)
     			case <-time.After(getRandTimeout()):
     			}
     		case LEADER:
@@ -485,6 +518,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
                     applyMsg.Index = i
                     applyMsg.Command = rf.log[i].Command
                     applyCh <- applyMsg
+                    DPrintf("%v(%v) apply %v\n", rf.me, rf.currentTerm, i)
                     rf.lastApplied++
                 }
             }
@@ -505,6 +539,7 @@ func (rf *Raft) startElection() {
 	args.Term = rf.currentTerm
 	args.CandidateId = rf.me
     args.LastLogIndex, args.LastLogTerm = rf.getLastLogInfo()
+    DPrintf("raft %v(%v) start election\n", rf.me, rf.currentTerm)
     rf.mu.Unlock()
 	for i := 0; i < len(rf.peers) && rf.state == CANDIDATE; i++ {
         if i == rf.me { continue }
@@ -541,6 +576,8 @@ func (rf *Raft) startHeartBeat() {
     // counting replicas
     rf.mu.Lock()
     defer rf.mu.Unlock()
+    DPrintf("raft %v(%v) start heartbeat commit %v, len %v\n", rf.me,
+        rf.currentTerm, rf.commitIndex, len(rf.log))
 
     for i := len(rf.log) - 1; i > rf.commitIndex &&
             rf.log[i].Term == rf.currentTerm; i-- {
